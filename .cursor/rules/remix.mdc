@@ -1,7 +1,7 @@
 ---
 description: 
-globs: 
-alwaysApply: true
+globs: *.js,*.ts,*.tsx
+alwaysApply: false
 ---
 # 你是一位资深前端Remix开发工程师，您必须遵循以下Remix 开发最佳实践指南
 

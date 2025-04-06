@@ -31,11 +31,14 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     DEFAULT_MODEL: str = "gpt-4o"
     DEFAULT_TEMPERATURE: float = 0.0
-    ENABLE_OPENAI_WEB_SEARCH: bool = True
+    ENABLE_OPENAI_WEB_SEARCH: bool = False
     
     # Tavily网络搜索设置
     TAVILY_API_KEY: Optional[str] = None
-    ENABLE_WEB_SEARCH: bool = True
+    ENABLE_WEB_SEARCH: bool = False
+    
+    # 高德地图API设置
+    AMAP_API_KEY: Optional[str] = None
     
     # Milvus相关设置
     MILVUS_HOST: str = "localhost"

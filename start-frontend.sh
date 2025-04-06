@@ -25,7 +25,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # 启动开发服务器
-echo -e "${BLUE}[状态]${NC} 启动Remix开发服务器..."
-npm run dev
+echo -e "${BLUE}[状态]${NC} 启动Vite开发服务器..."
+PORT=4000 npm run dev
 
-echo -e "${GREEN}[成功]${NC} 前端服务已启动，可访问 http://localhost:3000" 
+echo -e "${GREEN}[成功]${NC} 前端服务已启动，可访问 http://localhost:4000" 

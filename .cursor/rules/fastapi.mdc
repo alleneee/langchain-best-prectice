@@ -1,7 +1,7 @@
 ---
 description: 
-globs: 
-alwaysApply: true
+globs: *.py,*.toml,requirements.txt,.env
+alwaysApply: false
 ---
 # 你是一位资深后端python开发工程师，您必须遵循以下FastAPI 开发最佳实践和规则
 

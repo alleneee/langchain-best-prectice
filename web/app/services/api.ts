@@ -4,6 +4,7 @@
 
 import { json } from '@remix-run/node';
 
+// 修改API基础URL，使用绝对路径指向后端服务器
 const API_BASE_URL = "http://localhost:8000/api";
 
 export interface ChatMessage {
@@ -23,6 +24,7 @@ export interface QuestionResponse {
     history: { role: string; content: string }[];
     history_id: string;
     web_sources?: Source[];
+    tools_used?: string[]; // 添加工具使用信息
 }
 
 export interface SessionResponse {
@@ -42,15 +44,29 @@ export interface SystemStatusResponse {
  * 创建新会话
  */
 export async function createSession(): Promise<SessionResponse> {
-    const response = await fetch('/api/session', {
-        method: 'POST',
-    });
+    console.log("Creating new session...");
+    try {
+        const url = `${API_BASE_URL}/session`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                "Content-Type": "application/json",
+            },
+        });
 
-    if (!response.ok) {
-        throw new Error('创建会话失败');
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => "Unable to retrieve error details");
+            console.error(`Failed to create session: ${response.status} - ${errorText}`);
+            throw new Error(`Failed to create session: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        console.log("Session created successfully:", data.session_id);
+        return data;
+    } catch (error) {
+        console.error("Error during session creation request:", error);
+        throw error; // Re-throw the error to be caught by the caller
     }
-
-    return await response.json();
 }
 
 /**
@@ -61,9 +77,12 @@ export async function sendQuestion(
     sessionId: string | null,
     model: string,
     temperature: number,
-    useWebSearch: boolean
+    useDocQA: boolean
 ): Promise<QuestionResponse> {
-    const response = await fetch(`${API_BASE_URL}/question`, {
+    // 根据模式选择不同的端点
+    const endpoint = useDocQA ? "document-qa/question" : "tour-guide";
+
+    const response = await fetch(`${API_BASE_URL}/${endpoint}`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -73,7 +92,7 @@ export async function sendQuestion(
             history_id: sessionId,
             model,
             temperature,
-            use_web_search: useWebSearch,
+            use_web_search: useDocQA,
         }),
     });
 
@@ -85,10 +104,54 @@ export async function sendQuestion(
 }
 
 /**
+ * 发送流式问题请求
+ */
+export async function sendStreamQuestion(
+    question: string,
+    sessionId: string, // Non-nullable now, ensured by caller
+    model: string,
+    temperature: number,
+    useDocQA: boolean
+): Promise<Response> {
+    const endpoint = useDocQA ? "document-qa/question/stream" : "tour-guide/stream";
+    const url = `${API_BASE_URL}/${endpoint}`;
+
+    console.log(`Sending stream request to: ${url} with session ID: ${sessionId}`);
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                question,
+                history_id: sessionId,
+                model,
+                temperature,
+                use_web_search: useDocQA,
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => "无法获取错误详情");
+            console.error(`API Error: ${response.status} - ${errorText}`);
+            throw new Error(`发送流式问题失败: ${response.status} - ${errorText}`);
+        }
+
+        console.log(`Stream request successful: ${response.status}`);
+        return response;
+    } catch (error) {
+        console.error("Fetch failed for stream request:", error);
+        throw error; // Re-throw
+    }
+}
+
+/**
  * 获取系统状态
  */
 export async function getSystemStatus(): Promise<SystemStatusResponse> {
-    const response = await fetch('/api/status');
+    const response = await fetch(`${API_BASE_URL}/status`);
 
     if (!response.ok) {
         throw new Error('获取系统状态失败');
@@ -99,7 +162,7 @@ export async function getSystemStatus(): Promise<SystemStatusResponse> {
 
 // 上传文档
 export async function uploadDocument(formData: FormData) {
-    const response = await fetch('/api/document-qa/upload', {
+    const response = await fetch(`${API_BASE_URL}/document-qa/upload`, {
         method: 'POST',
         body: formData,
     });

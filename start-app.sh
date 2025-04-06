@@ -72,7 +72,7 @@ deactivate
 
 echo -e "${GREEN}===== 服务已启动 =====${NC}"
 echo -e "后端API服务: http://localhost:8000"
-echo -e "前端界面: http://localhost:3000"
+echo -e "前端界面: http://localhost:4000"
 echo -e "按Ctrl+C停止所有服务"
 
 # 保持脚本运行
