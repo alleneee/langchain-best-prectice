@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -19,51 +20,58 @@ from app.schemas.document_qa import Message, ChatHistory
 class SessionService:
     """会话管理服务，管理用户会话和聊天历史"""
     
-    def __init__(self, sessions_dir: str = None):
+    def __init__(self, sessions_dir: Optional[Path] = None):
         """
         初始化会话服务
         
         参数:
-            sessions_dir: 会话存储目录
+            sessions_dir: 会话存储目录 (使用settings.DATA_DIR)
         """
-        self.sessions_dir = sessions_dir or settings.SESSIONS_DIR
-        self.sessions: Dict[str, Dict[str, Any]] = {}  # {session_id: {history, last_access}}
+        self.sessions_dir = sessions_dir or settings.DATA_DIR / "sessions"
+        self.sessions: Dict[str, Dict[str, Any]] = {}  # {session_id: {history, last_access, created_at}}
         
         # 确保会话目录存在
-        os.makedirs(self.sessions_dir, exist_ok=True)
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
         
         # 加载现有会话
         self._load_existing_sessions()
-        logger.info(f"会话服务初始化，已加载 {len(self.sessions)} 个会话")
+        logger.info(f"会话服务初始化，会话目录: {self.sessions_dir}, 已加载 {len(self.sessions)} 个会话")
     
     def _load_existing_sessions(self) -> None:
         """加载已存在的会话文件"""
         try:
-            for filename in os.listdir(self.sessions_dir):
-                if filename.endswith('.json'):
-                    session_id = filename.replace('.json', '')
-                    file_path = os.path.join(self.sessions_dir, filename)
-                    
-                    try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            session_data = json.load(f)
-                            
-                        messages = []
-                        for msg in session_data.get('messages', []):
-                            if 'role' in msg and 'content' in msg:
-                                messages.append(Message(role=msg['role'], content=msg['content']))
+            for file_path in self.sessions_dir.glob("*.json"):
+                session_id = file_path.stem
+                try:
+                    with file_path.open('r', encoding='utf-8') as f:
+                        session_data = json.load(f)
                         
-                        self.sessions[session_id] = {
-                            'history': ChatHistory(messages=messages),
-                            'last_access': time.time(),
-                            'created_at': session_data.get('created_at', 
-                                                          datetime.now().isoformat())
-                        }
-                        logger.debug(f"加载会话: {session_id}, 消息数: {len(messages)}")
-                    except Exception as e:
-                        logger.error(f"加载会话 {session_id} 失败: {e}")
+                    messages = []
+                    for msg_data in session_data.get('messages', []):
+                        if isinstance(msg_data, dict) and 'role' in msg_data and 'content' in msg_data:
+                            messages.append(Message(role=msg_data['role'], content=msg_data['content']))
+                        elif isinstance(msg_data, Message):
+                            messages.append(msg_data)
+                        
+                    langchain_messages = []
+                    for msg_data in session_data.get('langchain_messages', []):
+                         if isinstance(msg_data, dict) and 'type' in msg_data and 'content' in msg_data:
+                             if msg_data['type'] == 'human': langchain_messages.append(HumanMessage(content=msg_data['content']))
+                             elif msg_data['type'] == 'ai': langchain_messages.append(AIMessage(content=msg_data['content']))
+                             elif msg_data['type'] == 'system': langchain_messages.append(SystemMessage(content=msg_data['content']))
+                    
+                    final_messages_for_lc = langchain_messages if langchain_messages else self.convert_to_langchain_messages(messages)
+                    
+                    self.sessions[session_id] = {
+                        'langchain_history': final_messages_for_lc,
+                        'last_access': time.time(),
+                        'created_at': session_data.get('created_at', datetime.now().isoformat())
+                    }
+                    logger.debug(f"加载会话: {session_id}, 消息数: {len(final_messages_for_lc)}")
+                except Exception as e:
+                    logger.error(f"加载会话 {session_id} ({file_path}) 失败: {e}", exc_info=True)
         except Exception as e:
-            logger.error(f"加载会话目录失败: {e}")
+            logger.error(f"加载会话目录 {self.sessions_dir} 失败: {e}", exc_info=True)
     
     def create_session(self) -> str:
         """
@@ -72,20 +80,7 @@ class SessionService:
         返回:
             新会话的ID
         """
-        session_id = str(uuid.uuid4())
-        created_at = datetime.now().isoformat()
-        
-        self.sessions[session_id] = {
-            'history': ChatHistory(messages=[]),
-            'last_access': time.time(),
-            'created_at': created_at
-        }
-        
-        # 保存到文件
-        self._save_session(session_id)
-        logger.info(f"创建新会话: {session_id}")
-        
-        return session_id
+        return self.create_chat_history()
     
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -98,9 +93,12 @@ class SessionService:
             会话数据字典，如果不存在则返回None
         """
         if session_id in self.sessions:
-            # 更新最后访问时间
             self.sessions[session_id]['last_access'] = time.time()
-            return self.sessions[session_id]
+            return {
+                 'history': self.convert_from_langchain_messages(self.sessions[session_id]['langchain_history']),
+                 'last_access': self.sessions[session_id]['last_access'],
+                 'created_at': self.sessions[session_id]['created_at']
+            }
         return None
     
     def get_history(self, session_id: str) -> Optional[ChatHistory]:
@@ -113,8 +111,10 @@ class SessionService:
         返回:
             聊天历史对象，如果会话不存在则返回None
         """
-        session = self.get_session(session_id)
-        return session['history'] if session else None
+        lc_history = self.get_chat_history(session_id)
+        if lc_history is not None:
+            return ChatHistory(messages=self.convert_from_langchain_messages(lc_history))
+        return None
     
     def update_history(self, session_id: str, history: ChatHistory) -> bool:
         """
@@ -127,18 +127,8 @@ class SessionService:
         返回:
             更新是否成功
         """
-        if session_id not in self.sessions:
-            logger.warning(f"尝试更新不存在的会话: {session_id}")
-            return False
-        
-        self.sessions[session_id]['history'] = history
-        self.sessions[session_id]['last_access'] = time.time()
-        
-        # 保存到文件
-        self._save_session(session_id)
-        logger.debug(f"更新会话历史: {session_id}, 消息数: {len(history.messages)}")
-        
-        return True
+        lc_messages = self.convert_to_langchain_messages(history.messages)
+        return self.save_chat_history(session_id, lc_messages)
     
     def add_message(self, session_id: str, message: Message) -> bool:
         """
@@ -155,13 +145,12 @@ class SessionService:
             logger.warning(f"尝试添加消息到不存在的会话: {session_id}")
             return False
         
-        self.sessions[session_id]['history'].messages.append(message)
+        lc_message = self.convert_to_langchain_messages([message])[0]
+        self.sessions[session_id]['langchain_history'].append(lc_message)
         self.sessions[session_id]['last_access'] = time.time()
         
-        # 保存到文件
         self._save_session(session_id)
         logger.debug(f"添加消息到会话: {session_id}, 角色: {message.role}")
-        
         return True
     
     def delete_session(self, session_id: str) -> bool:
@@ -182,14 +171,14 @@ class SessionService:
         del self.sessions[session_id]
         
         # 删除文件
-        file_path = os.path.join(self.sessions_dir, f"{session_id}.json")
+        file_path = self.sessions_dir / f"{session_id}.json"
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if file_path.exists():
+                file_path.unlink()
             logger.info(f"删除会话: {session_id}")
             return True
         except Exception as e:
-            logger.error(f"删除会话文件失败: {e}")
+            logger.error(f"删除会话文件 {file_path} 失败: {e}", exc_info=True)
             return False
     
     def clear_history(self, session_id: str) -> bool:
@@ -206,10 +195,9 @@ class SessionService:
             logger.warning(f"尝试清空不存在的会话: {session_id}")
             return False
         
-        self.sessions[session_id]['history'] = ChatHistory(messages=[])
+        self.sessions[session_id]['langchain_history'] = []
         self.sessions[session_id]['last_access'] = time.time()
         
-        # 保存到文件
         self._save_session(session_id)
         logger.info(f"清空会话历史: {session_id}")
         
@@ -226,34 +214,56 @@ class SessionService:
         for session_id, data in self.sessions.items():
             result.append({
                 'session_id': session_id,
-                'message_count': len(data['history'].messages),
+                'message_count': len(data.get('langchain_history', [])),
                 'last_access': datetime.fromtimestamp(data['last_access']).isoformat(),
                 'created_at': data['created_at']
             })
+        result.sort(key=lambda x: x['last_access'], reverse=True)
         return result
+    
+    def get_session_count(self) -> int:
+        """获取当前活动会话的数量"""
+        return len(self.sessions)
     
     def _save_session(self, session_id: str) -> None:
         """
-        保存会话到文件
+        保存单个会话到文件 (使用LangChain消息格式)
         
         参数:
             session_id: 会话ID
         """
         if session_id not in self.sessions:
+            logger.warning(f"尝试保存不存在的会话 {session_id}，跳过")
             return
         
         session_data = self.sessions[session_id]
-        file_path = os.path.join(self.sessions_dir, f"{session_id}.json")
+        file_path = self.sessions_dir / f"{session_id}.json"
+        
+        serializable_messages = []
+        for msg in session_data.get('langchain_history', []):
+            if isinstance(msg, HumanMessage): type_str = 'human'
+            elif isinstance(msg, AIMessage): type_str = 'ai'
+            elif isinstance(msg, SystemMessage): type_str = 'system'
+            else: type_str = 'unknown'
+            serializable_messages.append({'type': type_str, 'content': msg.content})
+            
+        save_data = {
+            'langchain_messages': serializable_messages,
+            'created_at': session_data.get('created_at', datetime.now().isoformat())
+        }
         
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'session_id': session_id,
-                    'messages': [msg.model_dump() for msg in session_data['history'].messages],
-                    'created_at': session_data.get('created_at', datetime.now().isoformat())
-                }, f, ensure_ascii=False, indent=2)
+            temp_file_path = file_path.with_suffix('.tmp')
+            with temp_file_path.open('w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=2)
+            os.replace(temp_file_path, file_path)
+            
+            logger.debug(f"保存会话到文件: {file_path}")
         except Exception as e:
-            logger.error(f"保存会话文件失败: {e}")
+            logger.error(f"保存会话 {session_id} 到 {file_path} 失败: {e}", exc_info=True)
+            if temp_file_path.exists():
+                try: temp_file_path.unlink()
+                except OSError: pass
     
     def convert_to_langchain_messages(self, messages: List[Message]) -> List[Any]:
         """
@@ -267,12 +277,14 @@ class SessionService:
         """
         lc_messages = []
         for msg in messages:
-            if msg.role == 'user':
+            if msg.role == 'user' or msg.role == 'human':
                 lc_messages.append(HumanMessage(content=msg.content))
-            elif msg.role == 'assistant':
+            elif msg.role == 'assistant' or msg.role == 'ai':
                 lc_messages.append(AIMessage(content=msg.content))
             elif msg.role == 'system':
                 lc_messages.append(SystemMessage(content=msg.content))
+            else:
+                logger.warning(f"未知消息角色 '{msg.role}'，跳过转换")
         return lc_messages
     
     def convert_from_langchain_messages(self, lc_messages: List[Any]) -> List[Message]:
@@ -293,63 +305,86 @@ class SessionService:
                 messages.append(Message(role='assistant', content=msg.content))
             elif isinstance(msg, SystemMessage):
                 messages.append(Message(role='system', content=msg.content))
+            else:
+                try:
+                    role = 'unknown'
+                    if hasattr(msg, 'type'):
+                        if msg.type == 'human': role = 'user'
+                        elif msg.type == 'ai': role = 'assistant'
+                        elif msg.type == 'system': role = 'system'
+                    content = getattr(msg, 'content', str(msg))
+                    messages.append(Message(role=role, content=content))
+                except Exception as e:
+                    logger.warning(f"无法转换未知类型的LangChain消息: {type(msg)}, 错误: {e}")
         return messages
     
     def create_chat_history(self) -> str:
         """
-        创建新的聊天历史
+        创建新的聊天历史并返回其ID (用于LangChain)
         
         返回:
             新聊天历史的ID
         """
-        return self.create_session()
-        
-    def get_chat_history(self, history_id: str) -> List[Any]:
+        history_id = str(uuid.uuid4())
+        created_at = datetime.now().isoformat()
+        self.sessions[history_id] = {
+            'langchain_history': [],
+            'last_access': time.time(),
+            'created_at': created_at
+        }
+        self._save_session(history_id)
+        logger.info(f"创建新的聊天历史 (LangChain): {history_id}")
+        return history_id
+    
+    def get_chat_history(self, history_id: str) -> Optional[List[Any]]:
         """
-        获取聊天历史
+        获取指定ID的LangChain聊天历史
         
         参数:
-            history_id: 历史ID
+            history_id: 聊天历史ID (即 session_id)
             
         返回:
-            LangChain消息对象列表，如果历史不存在则返回None
+            LangChain消息列表 (HumanMessage, AIMessage等)，如果不存在则返回None
         """
-        session = self.get_session(history_id)
-        if not session:
-            return None
+        if history_id in self.sessions:
+            self.sessions[history_id]['last_access'] = time.time()
+            return list(self.sessions[history_id].get('langchain_history', []))
         
-        # 转换为LangChain消息格式
-        return self.convert_to_langchain_messages(session['history'].messages)
+        file_path = self.sessions_dir / f"{history_id}.json"
+        if file_path.exists():
+             logger.warning(f"会话 {history_id} 不在内存中，但文件存在。尝试加载...")
+             self._load_existing_sessions()
+             if history_id in self.sessions:
+                  return list(self.sessions[history_id].get('langchain_history', []))
+             else:
+                  logger.error(f"尝试加载 {history_id} 后仍然失败。")
+                  return None
+        else:
+            logger.warning(f"找不到会话历史: {history_id}")
+            return None
     
     def save_chat_history(self, history_id: str, lc_messages: List[Any]) -> bool:
         """
-        保存聊天历史
+        保存或更新指定ID的LangChain聊天历史
         
         参数:
-            history_id: 历史ID
+            history_id: 聊天历史ID (即 session_id)
             lc_messages: LangChain消息列表
             
         返回:
             保存是否成功
         """
         if history_id not in self.sessions:
-            # 创建新会话
+            logger.warning(f"尝试保存到不存在的会话 {history_id}，将创建新会话。")
+            created_at = datetime.now().isoformat()
             self.sessions[history_id] = {
-                'history': ChatHistory(messages=[], history_id=history_id),
+                'langchain_history': [],
                 'last_access': time.time(),
-                'created_at': datetime.now().isoformat()
+                'created_at': created_at
             }
         
-        # 转换为内部消息格式
-        messages = self.convert_from_langchain_messages(lc_messages)
-        history = ChatHistory(messages=messages, history_id=history_id)
-        
-        # 更新会话
-        self.sessions[history_id]['history'] = history
+        self.sessions[history_id]['langchain_history'] = lc_messages
         self.sessions[history_id]['last_access'] = time.time()
-        
-        # 保存到文件
         self._save_session(history_id)
-        logger.debug(f"保存聊天历史: {history_id}, 消息数: {len(messages)}")
-        
+        logger.debug(f"保存聊天历史 (LangChain): {history_id}, 消息数: {len(lc_messages)}")
         return True 
