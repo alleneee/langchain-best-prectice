@@ -1,0 +1,9 @@
+{
+    "name": "langchain-best-practice-backend",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Placeholder package.json for Vercel deployment",
+    "scripts": {},
+    "dependencies": {},
+    "devDependencies": {}
+}

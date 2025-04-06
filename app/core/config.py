@@ -5,7 +5,8 @@
 import os
 from pathlib import Path
 from typing import Optional, Literal
-from pydantic_settings import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 # 项目根目录
 # Determine project root based on the location of this file
@@ -41,12 +42,25 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "LangChain Best Practice API"
     VERSION: str = "0.1.0"
     DESCRIPTION: str = "API for LangChain Best Practice application"
+    
+    # FastAPI app settings (added these to match main.py)
+    APP_NAME: str = "LangChain Best Practice API"
+    APP_VERSION: str = "0.1.0"
+    APP_DESCRIPTION: str = "API for LangChain Best Practice application"
+    API_PREFIX: str = "/api"
+    
+    # Log level
+    LOG_LEVEL: str = "INFO"
 
     # API settings
     API_V1_STR: str = "/api/v1"
 
     # OpenAI API Key
     OPENAI_API_KEY: str = Field(..., env="OPENAI_API_KEY")
+    
+    # Model settings
+    DEFAULT_MODEL: str = "gpt-3.5-turbo-0125"
+    DEFAULT_TEMPERATURE: float = 0.7
 
     # LangChain settings
     LANGCHAIN_TRACING_V2: bool = Field(True, env="LANGCHAIN_TRACING_V2")
