@@ -5,7 +5,7 @@
 ## 项目特点
 
 - **多格式文档支持**: PDF、DOCX、TXT、CSV、XLSX等
-- **向量检索**: 使用Milvus向量数据库实现高效语义搜索
+- **向量检索**: 使用向量数据库实现高效语义搜索
 - **会话管理**: 支持持久化会话历史，多轮对话
 - **多种界面**:
   - Remix + Tailwind CSS前端 (美观现代的Web界面)
@@ -39,7 +39,6 @@
 
 - Python 3.9+
 - Node.js 18+ (用于Remix前端)
-- Milvus 数据库 (2.0+)
 
 ### 安装步骤
 
@@ -148,7 +147,6 @@ cp template.env .env
 
 - [LangChain文档](https://python.langchain.com/docs)
 - [FastAPI文档](https://fastapi.tiangolo.com)
-- [Milvus文档](https://milvus.io/docs)
 - [Remix文档](https://remix.run/docs)
 - [Tailwind CSS文档](https://tailwindcss.com/docs)
 

@@ -2,14 +2,13 @@
 langchain>=0.3.0
 langchain-core>=0.1.0
 langchain-openai>=0.1.0
-langchain-community>=0.0.10
+langchain-community>=0.0.20
 langchain-text-splitters>=0.0.1
-tavily-python>=0.2.4
+tavily-python>=0.3.0
 langchain-tavily>=0.1.0
 langchain-mcp-adapters>=0.1.0
 
 # 向量存储相关依赖
-pymilvus>=2.0.0
 
 # 文档处理相关依赖
 unstructured>=0.10.0
@@ -23,3 +22,17 @@ fastapi>=0.100.0
 uvicorn>=0.20.0
 pydantic>=2.0.0
 python-multipart>=0.0.5
+
+# Tool Dependencies
+streamlit>=1.20.0
+pypdf>=3.0.0
+python-docx>=1.0.0
+langserve[client]
+
+# Tool Dependencies
+langchain_experimental # For PlanAndExecute agent
+google-api-python-client
+google-search-results
+
+# Optional: For caching
+# redis>=4.0.0

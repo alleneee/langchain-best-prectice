@@ -4,8 +4,9 @@
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from pydantic_settings import BaseSettings
+from pydantic import Field
 
 # 项目根目录
 ROOT_DIR = Path(__file__).parent.parent.parent
@@ -39,10 +40,6 @@ class Settings(BaseSettings):
     
     # 高德地图API设置
     AMAP_API_KEY: Optional[str] = None
-    
-    # Milvus相关设置
-    MILVUS_HOST: str = "localhost"
-    MILVUS_PORT: str = "19530"
     
     # 文档处理设置
     CHUNK_SIZE: int = 1000

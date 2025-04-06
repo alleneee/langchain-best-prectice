@@ -12,12 +12,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableBranch, RunnableLambda
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.retrievers import BaseRetriever
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 from app.core.config import settings
 from app.core.logging import logger
-from app.utils.vector_store import VectorStoreManager
 from app.utils.web_search import WebSearchManager
 from app.utils.document_loader import DocumentProcessor
 from app.services.session_service import SessionService
@@ -25,11 +23,10 @@ from app.schemas.document_qa import Message, ChatHistory, QuestionRequest
 
 
 class DocumentQAService:
-    """文档问答服务，提供RAG功能"""
+    """文档问答服务，提供问答功能 (RAG功能已移除)"""
     
     def __init__(self):
         """初始化文档问答服务"""
-        self.vector_store_manager = VectorStoreManager()
         self.document_processor = DocumentProcessor(
             chunk_size=settings.CHUNK_SIZE, 
             chunk_overlap=settings.CHUNK_OVERLAP
@@ -37,33 +34,226 @@ class DocumentQAService:
         self.session_service = SessionService()
         self.web_search_manager = WebSearchManager()
         
-        # 尝试加载现有索引
-        self.vector_store_manager.load_milvus_index()
-        
-        logger.info("文档问答服务初始化完成")
+        logger.info("文档问答服务初始化完成 (RAG功能已禁用)")
     
-    def process_document(
-        self, 
-        file_path: str, 
-        collection_name: str = "document_collection",
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def process_question(self, request: QuestionRequest) -> Dict[str, Any]:
         """
-        处理单个文档，创建向量索引
+        处理用户问题 (不使用RAG)
         
         参数:
-            file_path: 文档路径
-            collection_name: 集合名称
-            chunk_size: 文档分块大小，默认使用配置
-            chunk_overlap: 分块重叠大小，默认使用配置
+            request: 问题请求对象
             
         返回:
-            处理结果
+            处理结果，包含答案和更新后的聊天历史
         """
         try:
-            logger.info(f"处理文档: {file_path}")
+            question = request.question
+            history_id = request.history_id
+            model = request.model or settings.DEFAULT_MODEL  # 默认使用配置中的模型(gpt-4o)
+            temperature = request.temperature or settings.DEFAULT_TEMPERATURE
             
+            # 如果使用GPT-4o模型，默认启用web search
+            use_web_search = True if model == "gpt-4o" else request.use_web_search
+            search_settings = request.search_settings or {}
+            
+            logger.info(f"处理问题 (无RAG): {question[:50]}...")
+            
+            # 获取或创建会话历史
+            if history_id:
+                history = self.session_service.get_chat_history(history_id)
+                if not history:
+                    history_id = self.session_service.create_chat_history()
+                    history = []
+            else:
+                history_id = self.session_service.create_chat_history()
+                history = []
+            
+            # 添加新的用户消息
+            history.append(HumanMessage(content=question))
+            
+            # 处理问题
+            sources = []
+            web_sources = None
+            
+            # 如果只启用了网络搜索，使用网络搜索
+            if use_web_search and settings.ENABLE_WEB_SEARCH:
+                logger.info("使用网络搜索处理问题")
+                answer, web_sources = self._process_with_web_search(
+                    question, history, model, temperature, search_settings
+                )
+            # 否则只使用LLM
+            else:
+                logger.info("仅使用LLM处理问题")
+                answer = self._process_with_llm(
+                    question, history, model, temperature
+                )
+            
+            # 添加AI回复到历史
+            history.append(AIMessage(content=answer))
+            
+            # 保存更新后的历史
+            self.session_service.save_chat_history(history_id, history)
+            
+            return {
+                "answer": answer,
+                "sources": sources,
+                "web_sources": web_sources,
+                "history_id": history_id,
+                "history": [msg.dict() for msg in history]
+            }
+        except Exception as e:
+            logger.error(f"处理问题时出错: {str(e)}", exc_info=True)
+            return {"error": f"处理问题时出错: {str(e)}"}
+    
+    def _process_with_web_search(
+        self,
+        question: str,
+        chat_history: List[Any],
+        model: str = "gpt-4o",
+        temperature: float = 0.7,
+        search_settings: Dict[str, Any] = None
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """使用Web搜索来回答问题"""
+        try:
+            # 格式化聊天历史 (辅助函数)
+            def format_chat_history(history):
+                """将聊天历史格式化为字符串"""
+                formatted_history = []
+                for msg in history[:-1]: # Exclude the current question
+                    if isinstance(msg, HumanMessage):
+                        formatted_history.append(f"Human: {msg.content}")
+                    elif isinstance(msg, AIMessage):
+                        formatted_history.append(f"Assistant: {msg.content}")
+                return "\n".join(formatted_history)
+
+            formatted_history_str = format_chat_history(chat_history)
+
+            # 执行Web搜索
+            web_search_results = self.perform_web_search(question, search_settings)
+            web_context = web_search_results.get("context", "")
+            web_sources = web_search_results.get("sources", [])
+            
+            # 准备语言模型
+            llm = ChatOpenAI(model=model, temperature=temperature)
+            
+            # 构建提示
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "你是一个智能助手。请根据以下信息和聊天历史回答用户的问题。如果信息不相关，请根据你的知识回答。请在回答结尾处列出来源链接 (如果有)。\n\n"
+                           "相关信息:\n{context}\n\n聊天历史:\n{chat_history}"),
+                ("human", "{question}")
+            ])
+            
+            # 构建链
+            chain = RunnablePassthrough.assign(
+                chat_history=RunnableLambda(lambda x: formatted_history_str),
+                context=RunnableLambda(lambda x: web_context)
+            ) | prompt | llm | StrOutputParser()
+            
+            # 调用链
+            answer = chain.invoke({"question": question})
+            
+            return answer, web_sources
+        except Exception as e:
+            logger.error(f"使用Web搜索处理问题时出错: {str(e)}", exc_info=True)
+            return f"处理问题时遇到错误: {e}", []
+    
+    def _process_with_llm(
+        self,
+        question: str,
+        chat_history: List[Any],
+        model: str = "gpt-3.5-turbo",
+        temperature: float = 0.7
+    ) -> str:
+        """直接使用LLM回答问题"""
+        try:
+            # 格式化聊天历史
+            def format_chat_history(history):
+                """将聊天历史格式化为字符串"""
+                formatted_history = []
+                for msg in history[:-1]: # Exclude the current question
+                    if isinstance(msg, HumanMessage):
+                        formatted_history.append(f"Human: {msg.content}")
+                    elif isinstance(msg, AIMessage):
+                        formatted_history.append(f"Assistant: {msg.content}")
+                return "\n".join(formatted_history)
+
+            formatted_history_str = format_chat_history(chat_history)
+            
+            # 准备语言模型
+            llm = ChatOpenAI(model=model, temperature=temperature)
+            
+            # 构建提示
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "你是一个智能助手。请根据聊天历史回答用户的问题。\n\n聊天历史:\n{chat_history}"),
+                ("human", "{question}")
+            ])
+            
+            # 构建链
+            chain = RunnablePassthrough.assign(
+                chat_history=RunnableLambda(lambda x: formatted_history_str)
+            ) | prompt | llm | StrOutputParser()
+            
+            # 调用链
+            answer = chain.invoke({"question": question})
+            
+            return answer
+        except Exception as e:
+            logger.error(f"使用LLM处理问题时出错: {str(e)}", exc_info=True)
+            return f"处理问题时遇到错误: {e}"
+
+    def perform_web_search(self, query: str, search_settings: Dict[str, Any] = None) -> Dict[str, Any]:
+        """执行Web搜索并返回结果和来源"""
+        search_settings = search_settings or {}
+        num_results = search_settings.get("num_results", 3) # Default to 3 results
+        
+        if settings.ENABLE_WEB_SEARCH and settings.TAVILY_API_KEY:
+            try:
+                logger.info(f"执行Tavily Web搜索: {query[:50]}... (max_results={num_results})")
+                search_tool = TavilySearchResults(max_results=num_results)
+                results = search_tool.invoke(query)
+                
+                context = "\n".join([res["content"] for res in results])
+                sources = [{"title": res.get("title", "未知标题"), "url": res.get("url", "未知链接")} for res in results]
+                
+                logger.info(f"Tavily搜索完成，找到{len(sources)}个来源")
+                return {"context": context, "sources": sources}
+            except Exception as e:
+                logger.error(f"Tavily Web搜索失败: {str(e)}", exc_info=True)
+                return {"context": "Web搜索失败。", "sources": []}
+        else:
+            logger.warning("Web搜索未启用或未配置API密钥")
+            return {"context": "Web搜索未启用。", "sources": []}
+
+    def get_system_status(self) -> Dict[str, Any]:
+        """获取系统状态信息 (移除了向量存储状态)"""
+        web_search_enabled = settings.ENABLE_WEB_SEARCH and bool(settings.TAVILY_API_KEY)
+        
+        return {
+            "web_search_enabled": web_search_enabled,
+            "llm_model": settings.DEFAULT_MODEL,
+            "langchain_project": settings.LANGCHAIN_PROJECT,
+            "upload_dir": str(settings.UPLOAD_DIR),
+            "chunk_size": settings.CHUNK_SIZE,
+            "chunk_overlap": settings.CHUNK_OVERLAP
+        }
+
+    async def process_question_stream(self, request: QuestionRequest) -> AsyncGenerator[Tuple[str, Optional[Dict[str, Any]]], None]:
+        """
+        处理用户问题并流式返回答案 (不使用RAG)
+        
+        返回:
+            一个异步生成器，产生 (chunk, metadata) 元组
+            chunk: 答案的文本块
+            metadata: 在最后一个块中包含来源信息 (如果适用)
+        """
+        try:
+            question = request.question
+            history_id = request.history_id
+            model = request.model or settings.DEFAULT_MODEL
+            temperature = request.temperature or settings.DEFAULT_TEMPERATURE
+            use_web_search = True if model == "gpt-4o" else request.use_web_search
+            search_settings = request.search_settings or {}
+
             # 使用自定义分块参数创建处理器或使用默认处理器
             document_processor = self.document_processor
             if chunk_size or chunk_overlap:

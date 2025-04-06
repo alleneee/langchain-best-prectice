@@ -24,7 +24,6 @@ except ImportError:
 
 from app.core.config import settings
 from app.core.logging import logger
-from app.utils.vector_store import VectorStoreManager
 from app.services.session_service import SessionService
 from app.schemas.document_qa import QuestionRequest
 
@@ -42,10 +41,6 @@ class TourGuideService:
     def __init__(self):
         """初始化导游Agent服务"""
         self.session_service = SessionService()
-        self.vector_store_manager = VectorStoreManager()
-        
-        # 加载向量存储
-        self.vector_store_manager.load_milvus_index()
         
         # 初始化存储
         self.memory = MemorySaver()
@@ -64,30 +59,6 @@ class TourGuideService:
     def _init_tools(self) -> List[Any]:
         """初始化Agent工具"""
         tools = []
-        
-        # 禁用Web搜索工具
-        # if settings.ENABLE_WEB_SEARCH:
-        #     if settings.ENABLE_OPENAI_WEB_SEARCH:
-        #         # 使用模型内置网络搜索，不需要额外工具
-        #         pass
-        #     elif settings.TAVILY_API_KEY:
-        #         # 添加Tavily搜索工具
-        #         search_tool = TavilySearchResults(max_results=5)
-        #         tools.append(search_tool)
-        
-        # 添加向量存储检索工具
-        if self.vector_store_manager.vector_store:
-            retriever = self.vector_store_manager.vector_store.as_retriever(
-                search_kwargs={"k": 5}
-            )
-            
-            from langchain.tools.retriever import create_retriever_tool
-            retriever_tool = create_retriever_tool(
-                retriever,
-                "destination_search",
-                "搜索特定目的地的信息，如景点、文化、美食等。如果问题是关于特定旅游目的地的，请使用此工具。"
-            )
-            tools.append(retriever_tool)
         
         # 添加高德地图MCP工具
         self._add_amap_mcp_tools(tools)

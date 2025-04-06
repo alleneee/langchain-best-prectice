@@ -38,4 +38,26 @@ vector_stores/
 uploads/
 sessions/
 *.db
-.milvus/ 
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+
+# Environment
+.env
+venv/
+*.env
+
+# Cache and logs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# Operating System files
+.DS_Store
+Thumbs.db 
