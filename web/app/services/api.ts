@@ -5,7 +5,7 @@
 import { json } from '@remix-run/node';
 
 // 修改API基础URL，使用绝对路径指向后端服务器
-const API_BASE_URL = "http://localhost:8001/api";
+const API_BASE_URL = "http://localhost:8000/api";
 
 export interface ChatMessage {
     role: 'user' | 'assistant';
